@@ -138,15 +138,39 @@
 
   <script>
   (function(){
-    /* ===== CONFIG ===== */
-    const CLIENT_ID     = "440464489605-acftg7imqdf9s8t2pv3n8k7q4lrfcupn.apps.googleusercontent.com";
-    const ORG_DOMAIN    = "@quickhire.agency";
-    const CAND_SHEET_ID = "1qtKZtYrWfpHGyIDdazSY_oiz_IQ89vbMFZi7HiCxkhc";
-    const EMP_SHEET_ID  = "1A8defU4GxmV4rbxG50_qlSMpRh4jVcRyhw9fsrFotEg";
-    const SCOPES = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/spreadsheets";
+/* ===== CONFIG ===== */
+const CLIENT_ID     = "440464489605-acftg7imqdf9s8t2pv3n8k7q4lrfcupn.apps.googleusercontent.com";
+const ORG_DOMAIN    = "@quickhire.agency";
+const CAND_SHEET_ID = "1qtKZtYrWfpHGyIDdazSY_oiz_IQ89vbMFZi7HiCxkhc";
+const EMP_SHEET_ID  = "1A8defU4GxmV4rbxG50_qlSMpRh4jVcRyhw9fsrFotEg";
 
-    const EMP_HEADERS = ["Company Name","Contact Name","Email","Phone Number","Needs/Positions","Location","Notes","Date"];
-    const CAND_ORDER  = ["Name","Email","Phone Number","APPLICATION FOR EMPLOYMENT","Submitted On","Role(s) Desired","Past Experience","Skills/Certifications/Licenses","Criminal History","QuickHire\u2122 EEO Policy","QuickHire\u2122 Drug & Alcohol Policy","QuickHire\u2122 Workplace Safety (OSHA) Policy","Sex/Gender","Race/Ethnicity","Veteran Status","Disability Status","Signature","Date","Resume/CV Upload"];
+// Add Drive *readonly* so we can resolve resume links by file name if needed.
+const SCOPES = [
+  "openid",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/drive.readonly"
+].join(" ");
+
+// Candidate field order (skills directly after past experience)
+const CAND_ORDER = [
+  "Name","Email","Phone Number","APPLICATION FOR EMPLOYMENT","Submitted On",
+  "Role(s) Desired","Past Experience","Skills/Certifications/Licenses",
+  "Criminal History","QuickHire\u2122 EEO Policy","QuickHire\u2122 Drug & Alcohol Policy",
+  "QuickHire\u2122 Workplace Safety (OSHA) Policy","Sex/Gender","Race/Ethnicity",
+  "Veteran Status","Disability Status","Signature","Date","Resume/CV Upload"
+];
+
+// Employer field order (exact sequence you requested)
+const EMP_ORDER = [
+  "Company Name","Contact Name","Email","Phone Number",
+  "Submitted On","QUICKHIRE EMPLOYER APPLICATION","Staffing Needs",
+  "Name","CompanyOrganization","Company/Organization","Date"
+];
+
+const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
+
 
     let token=null, myEmail="", ACTIVE="candidates";
     const DS={
