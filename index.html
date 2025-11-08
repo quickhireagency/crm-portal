@@ -21,12 +21,15 @@
   .btn{ background:var(--primary); color:#fff; border:0; border-radius:10px; padding:10px 14px; font-weight:600; cursor:pointer }
   .btn.secondary{ background:#fff; color:#334155; border:1px solid var(--line) }
   .btn.ghost{ background:transparent; color:#334155; border:1px solid var(--line) }
-  .grid{ display:grid; grid-template-columns:2fr 1fr; gap:16px }
+
+  /* One-column stack: grid → details below the table */
+  .grid{ display:grid; grid-template-columns:1fr; gap:16px }
   .card{ background:var(--card); border:1px solid var(--line); border-radius:14px }
   .card>header{ display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid var(--line) }
   .card>.body{ padding:14px }
   .muted{ color:#64748b }
 
+  /* Table + horizontal scroll */
   .table-outer{ position:relative }
   .table-wrap{
     max-height:62vh;
@@ -36,22 +39,25 @@
   }
   .wide{ display:inline-block; width:max-content }
   table{ border-collapse:collapse; width:auto; min-width:100%; table-layout:auto }
-  thead th{ position:sticky; top:0; z-index:1; background:#f8fafc; border-bottom:1px solid var(--line); white-space:nowrap; min-width:220px }
-  th,td{ border-bottom:1px solid var(--line); padding:10px; vertical-align:top; white-space:nowrap; min-width:220px }
+  thead th{ position:sticky; top:0; z-index:1; background:#f8fafc; border-bottom:1px solid var(--line); white-space:nowrap; min-width:180px }
+  th,td{ border-bottom:1px solid var(--line); padding:10px; vertical-align:top; white-space:nowrap; min-width:180px }
   tr:hover{ background:#f9fafb }
-  .row-actions{ display:flex; gap:6px; flex-wrap:wrap }
+  .row-actions{ display:flex; gap:6px; flex-wrap:nowrap }
   .cell-edit{ width:100%; border:1px solid var(--primary); border-radius:6px; padding:6px }
 
   .hscroll-ctrl{ display:flex; align-items:center; gap:8px; padding:8px 0 }
   .hscroll-ctrl .btn{ padding:6px 10px; min-width:44px }
   .hscroll-ctrl input[type=range]{ flex:1; height:28px; touch-action:none }
 
+  /* Sticky bottom-right “nudge right” */
   #scroll-float{
     position:fixed; right:16px; bottom:16px; z-index:9999;
     background:#fff; color:#334155; border:1px solid var(--line);
     padding:10px 14px; border-radius:12px; box-shadow:0 6px 16px rgba(0,0,0,.08);
     cursor:pointer;
   }
+
+  /* Pretty native scrollbar */
   .table-wrap::-webkit-scrollbar{ height:12px }
   .table-wrap::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:8px }
   .table-wrap{ scrollbar-width:thin; scrollbar-color:#cbd5e1 transparent }
@@ -92,6 +98,7 @@
       </div>
 
       <div class="grid">
+        <!-- GRID: table card -->
         <section class="card">
           <header><strong id="list-title">Candidates</strong><span id="count" class="muted"></span></header>
           <div class="body table-outer">
@@ -107,6 +114,8 @@
             </div>
           </div>
         </section>
+
+        <!-- GRID: details card (now underneath) -->
         <section class="card">
           <header><strong id="detail-title">Details</strong></header>
           <div class="body" id="detail-body"><div class="muted">Select a row to view details, or click Add.</div></div>
@@ -145,163 +154,109 @@
       "https://www.googleapis.com/auth/drive.readonly"
     ].join(" ");
 
-    // Canonical order requirements
+    /* Canonical header map (punctuation/case-insensitive) */
+    const norm = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"");
+    const CANON = new Map([
+      ["name","name"],["contactname","name"],
+      ["email","email"],["emailaddress","email"],
+      ["phonenumber","phonenumber"],["phone","phonenumber"],["mobile","phonenumber"],
+      ["applicationforemployment","applicationforemployment"],
+      ["submittedon","submittedon"],["date","submittedon"],["submitted","submittedon"],
+      ["rolesdesired","rolesdesired"],["roledesired","rolesdesired"],["roles","rolesdesired"],
+      ["pastexperience","pastexperience"],["experience","pastexperience"],["workhistory","pastexperience"],
+      ["skillscertificationslicenses","skillscertificationslicenses"],["skills","skillscertificationslicenses"],
+      ["skills/certifications/licenses","skillscertificationslicenses"],["skillsandcertifications","skillscertificationslicenses"],
+      ["criminalhistory","criminalhistory"],["criminal","criminalhistory"],
+      ["quickhireeeopolicy","quickhireeeopolicy"],
+      ["quickhiredrugalcoholpolicy","quickhiredrugalcoholpolicy"],
+      ["quickhireworkplacesafetyoshapolicy","quickhireworkplacesafetyoshapolicy"],
+      ["sexgender","sexgender"],["sex","sexgender"],["gender","sexgender"],
+      ["raceethnicity","raceethnicity"],["race","raceethnicity"],["ethnicity","raceethnicity"],
+      ["veteranstatus","veteranstatus"],["disabilitystatus","disabilitystatus"],
+      ["signature","signature"],["resume/cvupload","resume/cvupload"],["resume","resume/cvupload"],["cv","resume/cvupload"],
+      // Employers
+      ["companyorganization","companyorganization"],["company/organization","companyorganization"],["companyname","companyorganization"],["company","companyorganization"],["organization","companyorganization"],
+      ["staffingneeds","staffingneeds"],["needs/positions","staffingneeds"],["needspositions","staffingneeds"],["needs","staffingneeds"],
+      ["quickhireemployerapplication","quickhireemployerapplication"]
+    ]);
+    const canonOfHeader = h => CANON.get(norm(h)) || norm(h);
+
+    /* Desired canonical sequences */
     const CAND_ORDER_CANON = [
       "name","email","phonenumber","applicationforemployment","submittedon",
       "rolesdesired","pastexperience","skillscertificationslicenses"
     ];
-    // Employers: EXACT order requested; the rest will follow after these five
     const EMP_ORDER_CANON = [
       "companyorganization","name","email","staffingneeds","quickhireemployerapplication"
     ];
 
-    // ===== Helpers
-    const $=s=>document.querySelector(s); const $$=s=>Array.from(document.querySelectorAll(s));
-    const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
-    const toCol=n=>{let s="";while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26);}return s;};
-    function setStatus(m){ const el=$("#status"); if(el) el.textContent=m; }
-
-    // Normalize a header → token like "skillscertificationslicenses"
-    const norm = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"");
-    // Synonyms → canonical
-    const CANON = new Map([
-      ["name","name"],["contactname","name"],
-
-      ["email","email"],["emailaddress","email"],
-
-      ["phonenumber","phonenumber"],["phone","phonenumber"],["mobile","phonenumber"],
-
-      ["applicationforemployment","applicationforemployment"],["applicationforemploymentjobapplication","applicationforemployment"],
-
-      ["submittedon","submittedon"],["date","submittedon"],["submitted","submittedon"],
-
-      ["rolesdesired","rolesdesired"],["roledesired","rolesdesired"],["roles","rolesdesired"],["role(s)desired","rolesdesired"],
-
-      ["pastexperience","pastexperience"],["experience","pastexperience"],["workhistory","pastexperience"],
-
-      ["skillscertificationslicenses","skillscertificationslicenses"],
-      ["skills","skillscertificationslicenses"],
-      ["skills/certifications/licenses","skillscertificationslicenses"],
-      ["skillscertifications","skillscertificationslicenses"],
-      ["skillsandcertifications","skillscertificationslicenses"],
-
-      ["criminalhistory","criminalhistory"],["criminal","criminalhistory"],
-
-      ["quickhireeeopolicy","quickhireeeopolicy"],
-      ["quickhiredrugalcoholpolicy","quickhiredrugalcoholpolicy"],
-      ["quickhireworkplacesafetyoshapolicy","quickhireworkplacesafetyoshapolicy"],
-
-      ["sexgender","sexgender"],["sex","sexgender"],["gender","sexgender"],
-      ["raceethnicity","raceethnicity"],["race","raceethnicity"],["ethnicity","raceethnicity"],
-      ["veteranstatus","veteranstatus"],["disabilitystatus","disabilitystatus"],
-
-      ["signature","signature"],
-
-      ["resume/cvupload","resume/cvupload"],["resume","resume/cvupload"],["cv","resume/cvupload"],
-
-      // Employers
-      ["companyorganization","companyorganization"],["company/organization","companyorganization"],["companyname","companyorganization"],["company","companyorganization"],["organization","companyorganization"],
-      ["staffingneeds","staffingneeds"],["needs/positions","staffingneeds"],["needspositions","staffingneeds"],["needs","staffingneeds"],
-      ["quickhireemployerapplication","quickhireemployerapplication"],
-
-      ["phonenumberemployer","phonenumber"],["phoneemployer","phonenumber"] // just in case
-    ]);
-
-    function canonOfHeader(h){
-      const n = norm(h);
-      if (CANON.has(n)) return CANON.get(n);
-      // try relaxed matches (strip words like policy, the, etc.)
-      return n;
-    }
-
-    function orderHeadersStrict(headers, desiredCanonList, extrasTailFromCanon=null){
-      // Map canon → actual header text present
-      const byCanon = new Map();
-      headers.forEach(h=>{
-        const c = canonOfHeader(h);
-        if (c && !byCanon.has(c)) byCanon.set(c, h);
-      });
-
-      // Build ordered list by desired canon keys
-      const ordered = [];
-      desiredCanonList.forEach(c=>{
-        if (byCanon.has(c)) ordered.push(byCanon.get(c));
-      });
-
-      // If a tail trigger is provided (e.g., from "criminalhistory"), append everything from there in sheet order
-      if (extrasTailFromCanon){
-        const triggerHeader = byCanon.get(extrasTailFromCanon);
-        if (triggerHeader){
-          const idx = headers.indexOf(triggerHeader);
-          if (idx >= 0){
-            headers.slice(idx).forEach(h=>{
-              if (!ordered.includes(h)) ordered.push(h);
-            });
-          }
-        }
-      }
-
-      // Finally append any headers we didn't include yet (preserve sheet order)
-      headers.forEach(h=>{ if (!ordered.includes(h)) ordered.push(h); });
-      return ordered;
-    }
-
-    // Resume resolver (URL / Drive ID / filename → URL)
-    async function getResumeLink(raw){
-      if(!raw) return null;
-      const val = String(raw).trim();
-      if (/^https?:\/\//i.test(val)) return val;               // already a URL
-      if (/^[A-Za-z0-9_-]{20,}$/.test(val)) {                  // Drive file ID heuristic
-        return `https://drive.google.com/uc?id=${encodeURIComponent(val)}&export=download`;
-      }
-      const q = `name='${val.replace(/'/g, "\\'")}' and trashed=false`;
-      const url = `https://www.googleapis.com/drive/v3/files` +
-                  `?q=${encodeURIComponent(q)}` +
-                  `&fields=files(id,name,webViewLink,webContentLink)` +
-                  `&supportsAllDrives=true&includeItemsFromAllDrives=true` +
-                  `&pageSize=5&orderBy=recency`;
-      try{
-        const r = await fetch(url,{ headers:{ Authorization:`Bearer ${token}` }});
-        const j = await r.json();
-        const f = (j.files||[])[0];
-        if(!f) return null;
-        return f.webViewLink || f.webContentLink || `https://drive.google.com/uc?id=${encodeURIComponent(f.id)}&export=download`;
-      }catch{ return null; }
-    }
-
+    /* Data stores */
     let token=null, myEmail="", ACTIVE="candidates";
     const DS={
       candidates:{sheetId:CAND_SHEET_ID, headers:[], rows:[], model:[], tab:"", tabs:[]},
       employers :{sheetId:EMP_SHEET_ID,  headers:[], rows:[], model:[], tab:"", tabs:[]}
     };
 
-    // Auth
-    $("#signin").onclick = function(){
+    const $=s=>document.querySelector(s); const $$=s=>Array.from(document.querySelectorAll(s));
+    const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+    const toCol=n=>{let s="";while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26);}return s;};
+    function setStatus(m){ const el=$("#status"); if(el) el.textContent=m; }
+
+    /* Drive resume helpers */
+    function toDriveDownload(u){
+      try{
+        const url=new URL(u);
+        if(url.hostname.includes("drive.google.com")){
+          const m=u.match(/\/file\/d\/([A-Za-z0-9_-]{20,})/);
+          const id=m?m[1]:(url.searchParams.get("id")||"");
+          if(id) return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`;
+        }
+      }catch{}
+      return u;
+    }
+    async function resolveResume(raw){
+      if(!raw) return null;
+      const val=String(raw).trim();
+      if(/^https?:\/\//i.test(val)) return { href: toDriveDownload(val), name: "" };
+      if(/^[A-Za-z0-9_-]{20,}$/.test(val)) return { href: `https://drive.google.com/uc?export=download&id=${encodeURIComponent(val)}`, name: "" };
+      const q = `name='${val.replace(/'/g,"\\'")}' and trashed=false`;
+      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,webViewLink,webContentLink)&supportsAllDrives=true&includeItemsFromAllDrives=true&pageSize=5&orderBy=recency`;
+      try{
+        const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+        const j=await r.json(); const f=(j.files||[])[0];
+        if(!f) return null;
+        const href = f.webContentLink ? f.webContentLink : `https://drive.google.com/uc?export=download&id=${encodeURIComponent(f.id)}`;
+        return { href, name: f.name || "" };
+      }catch{ return null; }
+    }
+
+    /* Auth */
+    $("#signin").onclick=function(){
       if(!window._gisReady){ setStatus("Loading Google… try again in a second"); return; }
-      const cli = google.accounts.oauth2.initTokenClient({
+      const cli=google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID, scope: SCOPES, ux_mode: "popup",
         callback: async (resp)=>{
           if(!resp?.access_token){ setStatus("Sign-in failed."); return; }
-          token = resp.access_token; setStatus("Checking account…");
-          const who = await fetch("https://www.googleapis.com/oauth2/v3/userinfo",{headers:{Authorization:"Bearer "+token}}).then(r=>r.json()).catch(()=>({}));
-          myEmail = who?.email || ""; $("#who").textContent = myEmail ? ("Signed in as " + myEmail) : "";
+          token=resp.access_token; setStatus("Checking account…");
+          const who=await fetch("https://www.googleapis.com/oauth2/v3/userinfo",{headers:{Authorization:"Bearer "+token}}).then(r=>r.json()).catch(()=>({}));
+          myEmail=who?.email||""; $("#who").textContent = myEmail?("Signed in as "+myEmail):"";
           if(!myEmail.endsWith(ORG_DOMAIN)){ $("#gate").innerHTML="<span style='color:#dc2626'>Use your @quickhire.agency account.</span>"; setStatus("Blocked"); return; }
           $("#signin").style.display="none"; $("#signout").style.display="inline-block";
           await initSheet("candidates"); await initSheet("employers"); setActive(ACTIVE); setStatus("Loaded ✔");
         }
       });
-      cli.requestAccessToken({ prompt:"consent" });
-      setTimeout(()=>{ if(!$("#who").textContent) setStatus(`If no Google window opened, allow pop-ups for ${location.origin}.`); }, 1200);
+      cli.requestAccessToken({prompt:"consent"});
+      setTimeout(()=>{ if(!$("#who").textContent) setStatus(`If no Google window opened, allow pop-ups for ${location.origin}.`); },1200);
     };
     $("#signout").onclick = ()=>{ try{ if(token) google.accounts.oauth2.revoke(token);}catch{} location.reload(); };
 
-    // Nav/UI
-    $("#nav-candidates").onclick = e=>{ e.preventDefault(); setActive("candidates"); };
-    $("#nav-employers").onclick  = e=>{ e.preventDefault(); setActive("employers"); };
-    $("#refresh").onclick        = ()=> loadActive();
-    $("#q").oninput              = ()=> renderRows();
-    $("#sort").onchange          = ()=> renderRows();
-    $("#add").onclick            = ()=> showForm();
+    /* Nav/UI */
+    $("#nav-candidates").onclick=e=>{ e.preventDefault(); setActive("candidates"); };
+    $("#nav-employers").onclick =e=>{ e.preventDefault(); setActive("employers"); };
+    $("#refresh").onclick = ()=> loadActive();
+    $("#q").oninput       = ()=> renderRows();
+    $("#sort").onchange   = ()=> renderRows();
+    $("#add").onclick     = ()=> showForm();
 
     function setActive(which){
       ACTIVE=which;
@@ -323,29 +278,44 @@
       sel.onchange=()=>{ cur.tab=sel.value; loadActive(); };
     }
 
+    function orderHeadersStrict(headers, desiredCanonList, tailFromCanon){
+      const byCanon=new Map();
+      headers.forEach(h=>{ const c=canonOfHeader(h); if(c && !byCanon.has(c)) byCanon.set(c,h); });
+      const ordered=[];
+      desiredCanonList.forEach(c=>{ if(byCanon.has(c)) ordered.push(byCanon.get(c)); });
+      if(tailFromCanon && byCanon.has(tailFromCanon)){
+        const start=headers.indexOf(byCanon.get(tailFromCanon));
+        if(start>=0) headers.slice(start).forEach(h=>{ if(!ordered.includes(h)) ordered.push(h); });
+      }
+      headers.forEach(h=>{ if(!ordered.includes(h)) ordered.push(h); });
+      return ordered;
+    }
+
     async function loadActive(){
       const cur=DS[ACTIVE];
-      const range = encodeURIComponent(`${cur.tab}!A1:ZZZ`);
-      const data = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cur.sheetId}/values/${range}`,{headers:{Authorization:"Bearer "+token}}).then(r=>r.json());
+      const range=encodeURIComponent(`${cur.tab}!A1:ZZZ`);
+      const data=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cur.sheetId}/values/${range}`,{headers:{Authorization:"Bearer "+token}}).then(r=>r.json());
       cur.rows=data.values||[];
       if(!cur.rows.length){ $("#thead").innerHTML=""; $("#tbody").innerHTML='<tr><td class="muted">No data yet.</td></tr>'; $("#count").textContent=""; syncScroll(); return; }
       cur.headers=cur.rows[0];
 
-      // ---- STRICT ORDERING
-      let ordered;
-      if (ACTIVE==="candidates") {
-        // Build strict order through canon keys, then append from "criminalhistory" onward, then the rest
-        ordered = orderHeadersStrict(cur.headers, CAND_ORDER_CANON, "criminalhistory");
-      } else {
-        // Employers: EXACT order (first 5), then everything else in sheet order
-        ordered = orderHeadersStrict(cur.headers, EMP_ORDER_CANON, null);
-      }
+      // Strict order for each tab
+      let ordered = (ACTIVE==="candidates")
+        ? orderHeadersStrict(cur.headers, CAND_ORDER_CANON, "criminalhistory")
+        : orderHeadersStrict(cur.headers, EMP_ORDER_CANON, null);
+
+      // Insert Actions column BEFORE Name / BEFORE CompanyOrganization
+      const ACTIONS_KEY="__ACTIONS__";
+      const beforeCanon = (ACTIVE==="candidates") ? "name" : "companyorganization";
+      let idx = ordered.findIndex(h=>canonOfHeader(h)===beforeCanon);
+      if(idx<0) idx=0;
+      ordered.splice(idx,0,ACTIONS_KEY);
 
       // Render header
-      $("#thead").innerHTML = ordered.map(h=>`<th>${esc(h)}</th>`).join("") + "<th></th>";
+      $("#thead").innerHTML = ordered.map(h=> h===ACTIONS_KEY ? `<th></th>` : `<th>${esc(h)}</th>`).join("");
 
       // Model
-      cur.model = cur.rows.slice(1).map((r,i)=>{ const o={}; cur.headers.forEach((h,idx)=>o[h]=r[idx]||""); return {rowIndex:i+2, data:o}; });
+      cur.model = cur.rows.slice(1).map((r,i)=>{ const o={}; cur.headers.forEach((h,ix)=>o[h]=r[ix]||""); return {rowIndex:i+2, data:o}; });
 
       renderRows();
       bindEditing(cur);
@@ -355,36 +325,53 @@
 
     function renderRows(){
       const cur=DS[ACTIVE], q=($("#q").value||"").toLowerCase();
-      const headers=[...$("#thead").children].slice(0,-1).map(th=>th.textContent.trim());
+      const headers=[...$("#thead").children].map(th=>th.textContent.trim() || "__ACTIONS__");
       let list=cur.model.slice();
+      // simple sort by date desc by default
       list.sort((a,b)=>{ const av=(a.data["Submitted On"]||a.data["Date"]||"")+"", bv=(b.data["Submitted On"]||b.data["Date"]||"")+""; return (Date.parse(bv)||0)-(Date.parse(av)||0); });
       if(q) list=list.filter(x=>Object.values(x.data).some(v=>(v||"").toString().toLowerCase().includes(q)));
       $("#count").textContent = list.length ? `${list.length} shown` : "";
 
       const rowsHtml = list.map(x=>{
         const tds = headers.map(h=>{
+          if(h==="__ACTIONS__"){
+            return `<td class="row-actions">
+              <button class="btn secondary" data-view="${x.rowIndex}">View</button>
+              <button class="btn ghost" data-edit="${x.rowIndex}">Edit</button>
+            </td>`;
+          }
           const raw = x.data[h]||"";
+          // Make resume a download link
           if (ACTIVE==="candidates" && canonOfHeader(h)==="resume/cvupload" && raw) {
             if (/^https?:\/\//i.test(raw)) {
-              return `<td><a class="btn secondary" href="${esc(raw)}" target="_blank" rel="noopener">Open</a></td>`;
+              const href = toDriveDownload(raw);
+              return `<td><a class="btn secondary" href="${esc(href)}" download target="_blank" rel="noopener">Download</a></td>`;
             } else {
-              return `<td><button class="btn secondary" data-resume="${esc(raw)}">Open</button></td>`;
+              return `<td><button class="btn secondary" data-resume="${esc(raw)}">Download</button></td>`;
             }
           }
           return `<td>${esc(raw)}</td>`;
         }).join("");
-        return `<tr data-row="${x.rowIndex}">${tds}<td class="row-actions"><button class="btn secondary" data-view="${x.rowIndex}">View</button><button class="btn ghost" data-edit="${x.rowIndex}">Edit</button></td></tr>`;
+        return `<tr data-row="${x.rowIndex}">${tds}</tr>`;
       }).join("");
 
       $("#tbody").innerHTML = rowsHtml;
+
+      // Row actions
       $$('[data-view]').forEach(b=>b.onclick=()=>showDetails(parseInt(b.getAttribute('data-view'),10)));
       $$('[data-edit]').forEach(b=>b.onclick=()=>showForm(parseInt(b.getAttribute('data-edit'),10)));
+
+      // Resolve non-URL resumes on demand (then force download via programmatic click)
       $$('[data-resume]').forEach(btn=>{
         btn.onclick = async () => {
-          const name = btn.getAttribute('data-resume') || "";
-          const href = await getResumeLink(name);
-          if(href) window.open(href, "_blank", "noopener");
-          else alert("Resume link not found for: " + name);
+          const raw = btn.getAttribute('data-resume') || "";
+          const info = await resolveResume(raw);
+          if(!info || !info.href){ alert("Resume link not found for: " + raw); return; }
+          const a=document.createElement('a');
+          a.href = info.href;
+          a.target="_blank"; a.rel="noopener";
+          a.download = info.name || "";   // browsers may ignore on cross-origin; Drive direct link prompts download. :contentReference[oaicite:1]{index=1}
+          document.body.appendChild(a); a.click(); a.remove();
         };
       });
     }
@@ -392,10 +379,10 @@
     function bindEditing(cur){
       $("#tbody").ondblclick = (e)=>{
         const td=e.target.closest("td"), tr=e.target.closest("tr"); if(!td||!tr) return;
-        const headers=[...$("#thead").children].slice(0,-1).map(th=>th.textContent.trim());
+        const headers=[...$("#thead").children].map(th=>th.textContent.trim() || "__ACTIONS__");
         const colIndex=[...td.parentNode.children].indexOf(td);
         const header=headers[colIndex]; const rowIndex=parseInt(tr.dataset.row,10);
-        if(!header||!rowIndex||td.classList.contains("editing")) return;
+        if(!header || header==="__ACTIONS__" || !rowIndex || td.classList.contains("editing")) return;
         const oldVal=td.textContent; td.classList.add("editing");
         td.innerHTML=`<input class="cell-edit" value="${oldVal.replace(/"/g,'&quot;')}" />`;
         const inp=td.querySelector("input"); inp.focus(); inp.select();
@@ -405,9 +392,9 @@
           const realIdx=DS[ACTIVE].headers.indexOf(header); if(realIdx<0) return;
           const colLetter=toCol(realIdx+1); const range=`${DS[ACTIVE].tab||"Sheet1"}!${colLetter}${rowIndex}:${colLetter}${rowIndex}`;
           const body={values:[[newVal]], majorDimension:"ROWS"};
-          await fetch(`https://www.googleapis.com/drive/v3/about`, {headers:{Authorization:"Bearer "+token}}).catch(()=>{});
           await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${DS[ACTIVE].sheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
-            {method:"PUT", headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"}, body:JSON.stringify(body)}).catch(()=>{ td.textContent=oldVal; });
+            {method:"PUT", headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"}, body:JSON.stringify(body)})
+            .catch(()=>{ td.textContent=oldVal; });
         };
         inp.onkeydown=e=>{ if(e.key==="Enter") commit(); else if(e.key==="Escape") cancel(); };
         inp.onblur=commit;
@@ -417,16 +404,22 @@
     async function showDetails(rowIndex){
       const cur=DS[ACTIVE], rec=cur.model.find(m=>m.rowIndex===rowIndex); if(!rec) return;
       const d=rec.data;
-      document.getElementById("detail-title").textContent = (ACTIVE==="candidates" ? (d["Name"]||`Row ${rowIndex}`) : (d["Company Name"]||d["Company/Organization"]||d["CompanyOrganization"]||`Row ${rowIndex}`));
+      const headers=[...$("#thead").children].map(th=>th.textContent.trim() || "__ACTIONS__").filter(h=>h!=="__ACTIONS__");
+      document.getElementById("detail-title").textContent =
+        (ACTIVE==="candidates" ? (d["Name"]||`Row ${rowIndex}`) : (d["Company Name"]||d["Company/Organization"]||d["CompanyOrganization"]||`Row ${rowIndex}`));
 
-      // Build a field list based on the final ordered header row shown in the grid
-      const headers=[...$("#thead").children].slice(0,-1).map(th=>th.textContent.trim());
-      let extra = "";
       // Resume action if present
+      let extra="";
       const resumeHeader = headers.find(h=>canonOfHeader(h)==="resume/cvupload");
       if (ACTIVE==="candidates" && resumeHeader && d[resumeHeader]) {
-        const href = await getResumeLink(d[resumeHeader]);
-        if (href) extra = `<div class="row-actions" style="margin-top:12px"><a class="btn secondary" href="${esc(href)}" target="_blank" rel="noopener">Open Resume</a></div>`;
+        const info = /^https?:\/\//i.test(d[resumeHeader])
+          ? { href: toDriveDownload(d[resumeHeader]), name: "" }
+          : await resolveResume(d[resumeHeader]);
+        if(info && info.href){
+          extra = `<div class="row-actions" style="margin-top:12px">
+            <a class="btn secondary" href="${esc(info.href)}" download target="_blank" rel="noopener">Download Resume</a>
+          </div>`;
+        }
       }
 
       document.getElementById("detail-body").innerHTML =
@@ -438,8 +431,9 @@
     }
 
     function showForm(rowIndex){
-      const cur=DS[ACTIVE], isEdit=!!rowIndex, d=isEdit?(cur.model.find(m=>m.rowIndex===rowIndex)?.data||{}):{};
-      const headers=[...$("#thead").children].slice(0,-1).map(th=>th.textContent.trim());
+      const cur=DS[ACTIVE], isEdit=!!rowIndex, rec=isEdit?(cur.model.find(m=>m.rowIndex===rowIndex)||{}):{};
+      const d=rec.data||{};
+      const headers=[...$("#thead").children].map(th=>th.textContent.trim() || "__ACTIONS__").filter(h=>h!=="__ACTIONS__");
       document.getElementById("detail-title").textContent = isEdit ? `Edit — Row ${rowIndex}` : (ACTIVE==="candidates" ? "Add Candidate" : "Add Employer");
       document.getElementById("detail-body").innerHTML = `<form id="f" onsubmit="return false"><input type="hidden" name="rowIndex" value="${isEdit?rowIndex:""}">
         ${headers.map(h=>`<div style="margin-bottom:8px"><div style="font-size:12px;color:#334155">${esc(h)}</div><input class="cell-edit" name="${esc(h)}" value="${isEdit?esc(d[h]||""):""}"></div>`).join("")}
@@ -447,11 +441,11 @@
           <button id="save" class="btn">${isEdit?"Save Changes":"Add"}</button>
           <button id="cancel" class="btn secondary" type="button">Cancel</button>
         </div></form>`;
-      $("#save").onclick=()=>submitForm();
-      $("#cancel").onclick=()=>{ $("#detail-title").textContent="Details"; $("#detail-body").innerHTML='<div class="muted">Select a row to view details, or click Add.</div>'; };
+      document.getElementById("save").onclick=()=>submitForm();
+      document.getElementById("cancel").onclick=()=>{ document.getElementById("detail-title").textContent="Details"; document.getElementById("detail-body").innerHTML='<div class="muted">Select a row to view details, or click Add.</div>'; };
     }
 
-    function collectRow(cur){
+    function collectRow(){
       const f=$("#f"); const map={}; DS[ACTIVE].headers.forEach(h=> map[h] = (f[h]?.value||"").trim() );
       if(DS[ACTIVE].headers.includes("Date") && !map["Date"]) map["Date"]=new Date().toLocaleDateString();
       if(DS[ACTIVE].headers.includes("Submitted On") && !map["Submitted On"]) map["Submitted On"]=new Date().toLocaleDateString();
@@ -461,7 +455,7 @@
     async function submitForm(){
       const cur=DS[ACTIVE], f=$("#f"); if(!f) return;
       const rowIndex = f.rowIndex.value ? parseInt(f.rowIndex.value,10) : null;
-      const row = collectRow(cur);
+      const row = collectRow();
       if(!rowIndex){
         await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cur.sheetId}/values/${encodeURIComponent(cur.tab||"Sheet1")}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
           { method:"POST", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) });
@@ -473,20 +467,19 @@
       await loadActive();
     }
 
-    // Horizontal scroll (native + buttons + nudge)
+    /* Horizontal scroll */
     function initScrollControls(){
       const wrap=$("#wrap"), slider=$("#scrollX"), left=$("#left"), right=$("#right"), float=$("#scroll-float");
       if(!wrap) return;
       const update=()=>{
-        const max = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
-        if(slider){ slider.max=String(max); slider.value=String(wrap.scrollLeft); slider.disabled = (max<=0); }
+        const max=Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+        if(slider){ slider.max=String(max); slider.value=String(wrap.scrollLeft); slider.disabled=(max<=0); }
         if(left) left.disabled=(max<=0); if(right) right.disabled=(max<=0); if(float) float.disabled=(max<=0);
       };
       if(slider){ slider.oninput=()=>{ wrap.scrollLeft=Number(slider.value||0); }; }
       wrap.addEventListener('scroll', update);
       wrap.addEventListener('wheel', (e)=>{ if(Math.abs(e.deltaY)>Math.abs(e.deltaX)){ wrap.scrollLeft+=e.deltaY; e.preventDefault(); } }, {passive:false});
-      function hold(btn, dir){
-        if(!btn) return; let t=null; const n=()=>{ wrap.scrollLeft += dir; };
+      function hold(btn,dir){ if(!btn) return; let t=null; const n=()=>{ wrap.scrollLeft += dir; };
         const start=()=>{ n(); t=setInterval(n,30); }; const stop=()=>{ clearInterval(t); t=null; };
         btn.addEventListener('mousedown', start); btn.addEventListener('mouseup', stop); btn.addEventListener('mouseleave', stop);
         btn.addEventListener('click', ()=>n());
