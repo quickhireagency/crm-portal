@@ -25,9 +25,8 @@
   .card{ background:var(--card); border:1px solid var(--line); border-radius:14px }
   .card>header{ display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid var(--line) }
   .card>.body{ padding:14px }
-  .muted{ color:var(--muted) }
+  .muted{ color:#64748b }
 
-  /* Horizontal scroll (standalone page, so this is reliable) */
   .table-outer{ position:relative }
   .table-wrap{
     max-height:62vh;
@@ -47,15 +46,12 @@
   .hscroll-ctrl .btn{ padding:6px 10px; min-width:44px }
   .hscroll-ctrl input[type=range]{ flex:1; height:28px; touch-action:none }
 
-  /* Sticky bottom-right nudge */
   #scroll-float{
     position:fixed; right:16px; bottom:16px; z-index:9999;
     background:#fff; color:#334155; border:1px solid var(--line);
     padding:10px 14px; border-radius:12px; box-shadow:0 6px 16px rgba(0,0,0,.08);
     cursor:pointer;
   }
-
-  /* Pretty native scrollbar */
   .table-wrap::-webkit-scrollbar{ height:12px }
   .table-wrap::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:8px }
   .table-wrap{ scrollbar-width:thin; scrollbar-color:#cbd5e1 transparent }
@@ -119,10 +115,9 @@
     </main>
   </div>
 
-  <!-- Sticky bottom-right nudge -->
   <button id="scroll-float" title="Scroll right">Scroll ▶</button>
 
-  <!-- Google Identity Services (preload; popup must be in user gesture) -->
+  <!-- GIS preload -->
   <script>
     window._gisReady=false;
     (function(){
@@ -142,52 +137,121 @@
     const CAND_SHEET_ID = "1qtKZtYrWfpHGyIDdazSY_oiz_IQ89vbMFZi7HiCxkhc";
     const EMP_SHEET_ID  = "1A8defU4GxmV4rbxG50_qlSMpRh4jVcRyhw9fsrFotEg";
 
-    /* GIS token model + REST calls to Sheets/Drive (popup token in click). */
     const SCOPES = [
       "openid",
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile",
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/drive.readonly"
-    ].join(" "); /* GIS token model; Sheets values.*; Drive files.list/webViewLink. :contentReference[oaicite:1]{index=1} */
+    ].join(" ");
 
-    /* Candidate order: Skills right after Past Experience */
-    const CAND_ORDER = [
-      "Name","Email","Phone Number","APPLICATION FOR EMPLOYMENT","Submitted On",
-      "Role(s) Desired","Past Experience","Skills/Certifications/Licenses",
-      "Criminal History","QuickHire\u2122 EEO Policy","QuickHire\u2122 Drug & Alcohol Policy",
-      "QuickHire\u2122 Workplace Safety (OSHA) Policy","Sex/Gender","Race/Ethnicity",
-      "Veteran Status","Disability Status","Signature","Date","Resume/CV Upload"
+    // Canonical order requirements
+    const CAND_ORDER_CANON = [
+      "name","email","phonenumber","applicationforemployment","submittedon",
+      "rolesdesired","pastexperience","skillscertificationslicenses"
     ];
-
-    /* Employers — exact sequence you requested (with synonyms fallback later) */
-    const EMP_ORDER = [
-      "Company Name","Contact Name","Email","Phone Number",
-      "Submitted On","QUICKHIRE EMPLOYER APPLICATION","Staffing Needs",
-      "Name","CompanyOrganization","Company/Organization","Date"
+    // Employers: EXACT order requested; the rest will follow after these five
+    const EMP_ORDER_CANON = [
+      "companyorganization","name","email","staffingneeds","quickhireemployerapplication"
     ];
-    const EMP_HEADERS = EMP_ORDER;
-
-    let token=null, myEmail="", ACTIVE="candidates";
-    const DS={
-      candidates:{sheetId:CAND_SHEET_ID, headers:[], rows:[], model:[], tab:"", tabs:[], fields:CAND_ORDER},
-      employers :{sheetId:EMP_SHEET_ID,  headers:[], rows:[], model:[], tab:"", tabs:[], fields:EMP_HEADERS}
-    };
 
     // ===== Helpers
     const $=s=>document.querySelector(s); const $$=s=>Array.from(document.querySelectorAll(s));
     const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
     const toCol=n=>{let s="";while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26);}return s;};
     function setStatus(m){ const el=$("#status"); if(el) el.textContent=m; }
-    function pick(Hs, list){ for(const c of list){const i=Hs.findIndex(h=>h.trim().toLowerCase()===c.trim().toLowerCase()); if(i>=0) return Hs[i]; } return null; }
-    function uniqKeep(a){ const seen=new Set(); return a.filter(x=>!seen.has(x)&&seen.add(x)); }
 
-    // Resolve resume: URL → open; Drive ID → download; filename → Drive search (across My/Shared drives)
+    // Normalize a header → token like "skillscertificationslicenses"
+    const norm = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"");
+    // Synonyms → canonical
+    const CANON = new Map([
+      ["name","name"],["contactname","name"],
+
+      ["email","email"],["emailaddress","email"],
+
+      ["phonenumber","phonenumber"],["phone","phonenumber"],["mobile","phonenumber"],
+
+      ["applicationforemployment","applicationforemployment"],["applicationforemploymentjobapplication","applicationforemployment"],
+
+      ["submittedon","submittedon"],["date","submittedon"],["submitted","submittedon"],
+
+      ["rolesdesired","rolesdesired"],["roledesired","rolesdesired"],["roles","rolesdesired"],["role(s)desired","rolesdesired"],
+
+      ["pastexperience","pastexperience"],["experience","pastexperience"],["workhistory","pastexperience"],
+
+      ["skillscertificationslicenses","skillscertificationslicenses"],
+      ["skills","skillscertificationslicenses"],
+      ["skills/certifications/licenses","skillscertificationslicenses"],
+      ["skillscertifications","skillscertificationslicenses"],
+      ["skillsandcertifications","skillscertificationslicenses"],
+
+      ["criminalhistory","criminalhistory"],["criminal","criminalhistory"],
+
+      ["quickhireeeopolicy","quickhireeeopolicy"],
+      ["quickhiredrugalcoholpolicy","quickhiredrugalcoholpolicy"],
+      ["quickhireworkplacesafetyoshapolicy","quickhireworkplacesafetyoshapolicy"],
+
+      ["sexgender","sexgender"],["sex","sexgender"],["gender","sexgender"],
+      ["raceethnicity","raceethnicity"],["race","raceethnicity"],["ethnicity","raceethnicity"],
+      ["veteranstatus","veteranstatus"],["disabilitystatus","disabilitystatus"],
+
+      ["signature","signature"],
+
+      ["resume/cvupload","resume/cvupload"],["resume","resume/cvupload"],["cv","resume/cvupload"],
+
+      // Employers
+      ["companyorganization","companyorganization"],["company/organization","companyorganization"],["companyname","companyorganization"],["company","companyorganization"],["organization","companyorganization"],
+      ["staffingneeds","staffingneeds"],["needs/positions","staffingneeds"],["needspositions","staffingneeds"],["needs","staffingneeds"],
+      ["quickhireemployerapplication","quickhireemployerapplication"],
+
+      ["phonenumberemployer","phonenumber"],["phoneemployer","phonenumber"] // just in case
+    ]);
+
+    function canonOfHeader(h){
+      const n = norm(h);
+      if (CANON.has(n)) return CANON.get(n);
+      // try relaxed matches (strip words like policy, the, etc.)
+      return n;
+    }
+
+    function orderHeadersStrict(headers, desiredCanonList, extrasTailFromCanon=null){
+      // Map canon → actual header text present
+      const byCanon = new Map();
+      headers.forEach(h=>{
+        const c = canonOfHeader(h);
+        if (c && !byCanon.has(c)) byCanon.set(c, h);
+      });
+
+      // Build ordered list by desired canon keys
+      const ordered = [];
+      desiredCanonList.forEach(c=>{
+        if (byCanon.has(c)) ordered.push(byCanon.get(c));
+      });
+
+      // If a tail trigger is provided (e.g., from "criminalhistory"), append everything from there in sheet order
+      if (extrasTailFromCanon){
+        const triggerHeader = byCanon.get(extrasTailFromCanon);
+        if (triggerHeader){
+          const idx = headers.indexOf(triggerHeader);
+          if (idx >= 0){
+            headers.slice(idx).forEach(h=>{
+              if (!ordered.includes(h)) ordered.push(h);
+            });
+          }
+        }
+      }
+
+      // Finally append any headers we didn't include yet (preserve sheet order)
+      headers.forEach(h=>{ if (!ordered.includes(h)) ordered.push(h); });
+      return ordered;
+    }
+
+    // Resume resolver (URL / Drive ID / filename → URL)
     async function getResumeLink(raw){
       if(!raw) return null;
       const val = String(raw).trim();
-      if (/^https?:\/\//i.test(val)) return val; // already a URL
-      if (/^[A-Za-z0-9_-]{20,}$/.test(val)) { // looks like Drive ID
+      if (/^https?:\/\//i.test(val)) return val;               // already a URL
+      if (/^[A-Za-z0-9_-]{20,}$/.test(val)) {                  // Drive file ID heuristic
         return `https://drive.google.com/uc?id=${encodeURIComponent(val)}&export=download`;
       }
       const q = `name='${val.replace(/'/g, "\\'")}' and trashed=false`;
@@ -203,9 +267,15 @@
         if(!f) return null;
         return f.webViewLink || f.webContentLink || `https://drive.google.com/uc?id=${encodeURIComponent(f.id)}&export=download`;
       }catch{ return null; }
-    } /* Drive v3 files.list with q=name and link fields. :contentReference[oaicite:2]{index=2} */
+    }
 
-    // ===== Auth (popup fired inside click per GIS doc)
+    let token=null, myEmail="", ACTIVE="candidates";
+    const DS={
+      candidates:{sheetId:CAND_SHEET_ID, headers:[], rows:[], model:[], tab:"", tabs:[]},
+      employers :{sheetId:EMP_SHEET_ID,  headers:[], rows:[], model:[], tab:"", tabs:[]}
+    };
+
+    // Auth
     $("#signin").onclick = function(){
       if(!window._gisReady){ setStatus("Loading Google… try again in a second"); return; }
       const cli = google.accounts.oauth2.initTokenClient({
@@ -220,12 +290,12 @@
           await initSheet("candidates"); await initSheet("employers"); setActive(ACTIVE); setStatus("Loaded ✔");
         }
       });
-      cli.requestAccessToken({ prompt:"consent" }); /* GIS token model. :contentReference[oaicite:3]{index=3} */
+      cli.requestAccessToken({ prompt:"consent" });
       setTimeout(()=>{ if(!$("#who").textContent) setStatus(`If no Google window opened, allow pop-ups for ${location.origin}.`); }, 1200);
     };
     $("#signout").onclick = ()=>{ try{ if(token) google.accounts.oauth2.revoke(token);}catch{} location.reload(); };
 
-    // ===== Nav/UI
+    // Nav/UI
     $("#nav-candidates").onclick = e=>{ e.preventDefault(); setActive("candidates"); };
     $("#nav-employers").onclick  = e=>{ e.preventDefault(); setActive("employers"); };
     $("#refresh").onclick        = ()=> loadActive();
@@ -261,35 +331,22 @@
       if(!cur.rows.length){ $("#thead").innerHTML=""; $("#tbody").innerHTML='<tr><td class="muted">No data yet.</td></tr>'; $("#count").textContent=""; syncScroll(); return; }
       cur.headers=cur.rows[0];
 
-      // ---- Column order
+      // ---- STRICT ORDERING
       let ordered;
       if (ACTIVE==="candidates") {
-        const Hs = cur.headers;
-        const name      = pick(Hs,["Name"]);
-        const email     = pick(Hs,["Email"]);
-        const phone     = pick(Hs,["Phone Number","Phone"]);
-        const app       = pick(Hs,["APPLICATION FOR EMPLOYMENT","APPLICATION FOR EMPLOYMENT:"]);
-        const submitted = pick(Hs,["Submitted On","Date","SubmittedOn"]);
-        const roles     = pick(Hs,["Roles Desired","Role(s) Desired"]);
-        const past      = pick(Hs,["Past Experience","Experience","Work History"]);
-        const skills    = pick(Hs,["Skills/Certifications/Licenses","Skills Certifications","Skills Certifications Licenses"]);
-        const crimHdr   = pick(Hs,["Criminal History","Criminal"]);
-        const crimIdx   = crimHdr ? Hs.indexOf(crimHdr) : -1;
-        const tail      = crimIdx >= 0 ? Hs.slice(crimIdx) : [];
-        ordered = uniqKeep([name,email,phone,app,submitted,roles,past,skills].filter(Boolean).concat(tail));
-        const extras = Hs.filter(h=>!ordered.includes(h));
-        ordered = ordered.concat(extras);
+        // Build strict order through canon keys, then append from "criminalhistory" onward, then the rest
+        ordered = orderHeadersStrict(cur.headers, CAND_ORDER_CANON, "criminalhistory");
       } else {
-        const prefer = [
-          "Company Name","Contact Name","Email","Phone Number",
-          "Submitted On","QUICKHIRE EMPLOYER APPLICATION","Staffing Needs",
-          "Name","CompanyOrganization","Company/Organization","Date"
-        ];
-        ordered = prefer.filter(h=>cur.headers.includes(h)).concat(cur.headers.filter(h=>!prefer.includes(h)));
+        // Employers: EXACT order (first 5), then everything else in sheet order
+        ordered = orderHeadersStrict(cur.headers, EMP_ORDER_CANON, null);
       }
 
+      // Render header
       $("#thead").innerHTML = ordered.map(h=>`<th>${esc(h)}</th>`).join("") + "<th></th>";
+
+      // Model
       cur.model = cur.rows.slice(1).map((r,i)=>{ const o={}; cur.headers.forEach((h,idx)=>o[h]=r[idx]||""); return {rowIndex:i+2, data:o}; });
+
       renderRows();
       bindEditing(cur);
       initScrollControls();
@@ -307,7 +364,7 @@
       const rowsHtml = list.map(x=>{
         const tds = headers.map(h=>{
           const raw = x.data[h]||"";
-          if (ACTIVE==="candidates" && h==="Resume/CV Upload" && raw) {
+          if (ACTIVE==="candidates" && canonOfHeader(h)==="resume/cvupload" && raw) {
             if (/^https?:\/\//i.test(raw)) {
               return `<td><a class="btn secondary" href="${esc(raw)}" target="_blank" rel="noopener">Open</a></td>`;
             } else {
@@ -348,6 +405,7 @@
           const realIdx=DS[ACTIVE].headers.indexOf(header); if(realIdx<0) return;
           const colLetter=toCol(realIdx+1); const range=`${DS[ACTIVE].tab||"Sheet1"}!${colLetter}${rowIndex}:${colLetter}${rowIndex}`;
           const body={values:[[newVal]], majorDimension:"ROWS"};
+          await fetch(`https://www.googleapis.com/drive/v3/about`, {headers:{Authorization:"Bearer "+token}}).catch(()=>{});
           await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${DS[ACTIVE].sheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
             {method:"PUT", headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"}, body:JSON.stringify(body)}).catch(()=>{ td.textContent=oldVal; });
         };
@@ -358,17 +416,21 @@
 
     async function showDetails(rowIndex){
       const cur=DS[ACTIVE], rec=cur.model.find(m=>m.rowIndex===rowIndex); if(!rec) return;
-      const d=rec.data; const fields=cur.fields.filter(h=>cur.headers.includes(h));
-      document.getElementById("detail-title").textContent = (ACTIVE==="candidates" ? (d["Name"]||`Row ${rowIndex}`) : (d["Company Name"]||`Row ${rowIndex}`));
+      const d=rec.data;
+      document.getElementById("detail-title").textContent = (ACTIVE==="candidates" ? (d["Name"]||`Row ${rowIndex}`) : (d["Company Name"]||d["Company/Organization"]||d["CompanyOrganization"]||`Row ${rowIndex}`));
 
+      // Build a field list based on the final ordered header row shown in the grid
+      const headers=[...$("#thead").children].slice(0,-1).map(th=>th.textContent.trim());
       let extra = "";
-      if (ACTIVE==="candidates" && d["Resume/CV Upload"]) {
-        const href = await getResumeLink(d["Resume/CV Upload"]);
+      // Resume action if present
+      const resumeHeader = headers.find(h=>canonOfHeader(h)==="resume/cvupload");
+      if (ACTIVE==="candidates" && resumeHeader && d[resumeHeader]) {
+        const href = await getResumeLink(d[resumeHeader]);
         if (href) extra = `<div class="row-actions" style="margin-top:12px"><a class="btn secondary" href="${esc(href)}" target="_blank" rel="noopener">Open Resume</a></div>`;
       }
 
       document.getElementById("detail-body").innerHTML =
-        fields.map(h=>`
+        headers.map(h=>`
           <div style="margin-bottom:8px">
             <div style="font-size:12px;color:#334155">${esc(h)}</div>
             <div>${esc(d[h]||"—")}</div>
@@ -377,10 +439,10 @@
 
     function showForm(rowIndex){
       const cur=DS[ACTIVE], isEdit=!!rowIndex, d=isEdit?(cur.model.find(m=>m.rowIndex===rowIndex)?.data||{}):{};
-      const fields=cur.fields.filter(h=>cur.headers.includes(h));
+      const headers=[...$("#thead").children].slice(0,-1).map(th=>th.textContent.trim());
       document.getElementById("detail-title").textContent = isEdit ? `Edit — Row ${rowIndex}` : (ACTIVE==="candidates" ? "Add Candidate" : "Add Employer");
       document.getElementById("detail-body").innerHTML = `<form id="f" onsubmit="return false"><input type="hidden" name="rowIndex" value="${isEdit?rowIndex:""}">
-        ${fields.map(h=>`<div style="margin-bottom:8px"><div style="font-size:12px;color:#334155">${esc(h)}</div><input class="cell-edit" name="${esc(h)}" value="${isEdit?esc(d[h]||""):""}"></div>`).join("")}
+        ${headers.map(h=>`<div style="margin-bottom:8px"><div style="font-size:12px;color:#334155">${esc(h)}</div><input class="cell-edit" name="${esc(h)}" value="${isEdit?esc(d[h]||""):""}"></div>`).join("")}
         <div class="row-actions" style="margin-top:10px">
           <button id="save" class="btn">${isEdit?"Save Changes":"Add"}</button>
           <button id="cancel" class="btn secondary" type="button">Cancel</button>
@@ -390,10 +452,10 @@
     }
 
     function collectRow(cur){
-      const f=$("#f"); const map={}; cur.headers.forEach(h=> map[h] = (f[h]?.value||"").trim() );
-      if(cur.headers.includes("Date") && !map["Date"]) map["Date"]=new Date().toLocaleDateString();
-      if(cur.headers.includes("Submitted On") && !map["Submitted On"]) map["Submitted On"]=new Date().toLocaleDateString();
-      return cur.headers.map(h=> map[h] || "" );
+      const f=$("#f"); const map={}; DS[ACTIVE].headers.forEach(h=> map[h] = (f[h]?.value||"").trim() );
+      if(DS[ACTIVE].headers.includes("Date") && !map["Date"]) map["Date"]=new Date().toLocaleDateString();
+      if(DS[ACTIVE].headers.includes("Submitted On") && !map["Submitted On"]) map["Submitted On"]=new Date().toLocaleDateString();
+      return DS[ACTIVE].headers.map(h=> map[h] || "" );
     }
 
     async function submitForm(){
@@ -402,16 +464,16 @@
       const row = collectRow(cur);
       if(!rowIndex){
         await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cur.sheetId}/values/${encodeURIComponent(cur.tab||"Sheet1")}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
-          { method:"POST", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) }); /* values.append USER_ENTERED. :contentReference[oaicite:4]{index=4} */
+          { method:"POST", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) });
       } else {
         const lastCol=toCol(cur.headers.length); const a1=`${cur.tab||"Sheet1"}!A${rowIndex}:${lastCol}${rowIndex}`;
         await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cur.sheetId}/values/${encodeURIComponent(a1)}?valueInputOption=USER_ENTERED`,
-          { method:"PUT", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) }); /* values.update. :contentReference[oaicite:5]{index=5} */
+          { method:"PUT", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) });
       }
       await loadActive();
     }
 
-    // ===== Horizontal scroll (native + buttons + floating nudge)
+    // Horizontal scroll (native + buttons + nudge)
     function initScrollControls(){
       const wrap=$("#wrap"), slider=$("#scrollX"), left=$("#left"), right=$("#right"), float=$("#scroll-float");
       if(!wrap) return;
