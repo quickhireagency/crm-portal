@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>QuickHire™ CRM Portal</title>
 
-<!-- Minimal styling + guaranteed horizontal scroll -->
 <style>
   :root{ --bg:#fff; --card:#fff; --line:#e5e7eb; --muted:#64748b; --ink:#0f172a; --primary:#1d4ed8; }
   *{ box-sizing:border-box }
@@ -28,7 +27,7 @@
   .card>.body{ padding:14px }
   .muted{ color:var(--muted) }
 
-  /* Guaranteed horizontal scroll (no Squarespace here, so this is enough) */
+  /* Horizontal scroll (standalone page, so this is reliable) */
   .table-outer{ position:relative }
   .table-wrap{
     max-height:62vh;
@@ -123,9 +122,8 @@
   <!-- Sticky bottom-right nudge -->
   <button id="scroll-float" title="Scroll right">Scroll ▶</button>
 
-  <!-- Google Identity Services -->
+  <!-- Google Identity Services (preload; popup must be in user gesture) -->
   <script>
-    // Preload GIS early so the click is a user gesture (prevents Chrome popup-block)
     window._gisReady=false;
     (function(){
       if (window.google && google.accounts && google.accounts.oauth2){ window._gisReady=true; document.getElementById('signin').disabled=false; return; }
@@ -138,39 +136,37 @@
 
   <script>
   (function(){
-/* ===== CONFIG ===== */
-const CLIENT_ID     = "440464489605-acftg7imqdf9s8t2pv3n8k7q4lrfcupn.apps.googleusercontent.com";
-const ORG_DOMAIN    = "@quickhire.agency";
-const CAND_SHEET_ID = "1qtKZtYrWfpHGyIDdazSY_oiz_IQ89vbMFZi7HiCxkhc";
-const EMP_SHEET_ID  = "1A8defU4GxmV4rbxG50_qlSMpRh4jVcRyhw9fsrFotEg";
+    /* ===== CONFIG ===== */
+    const CLIENT_ID     = "440464489605-acftg7imqdf9s8t2pv3n8k7q4lrfcupn.apps.googleusercontent.com";
+    const ORG_DOMAIN    = "@quickhire.agency";
+    const CAND_SHEET_ID = "1qtKZtYrWfpHGyIDdazSY_oiz_IQ89vbMFZi7HiCxkhc";
+    const EMP_SHEET_ID  = "1A8defU4GxmV4rbxG50_qlSMpRh4jVcRyhw9fsrFotEg";
 
-// Add Drive *readonly* so we can resolve resume links by file name if needed.
-const SCOPES = [
-  "openid",
-  "https://www.googleapis.com/auth/userinfo.email",
-  "https://www.googleapis.com/auth/userinfo.profile",
-  "https://www.googleapis.com/auth/spreadsheets",
-  "https://www.googleapis.com/auth/drive.readonly"
-].join(" ");
+    /* GIS token model + REST calls to Sheets/Drive (popup token in click). */
+    const SCOPES = [
+      "openid",
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/drive.readonly"
+    ].join(" "); /* GIS token model; Sheets values.*; Drive files.list/webViewLink. :contentReference[oaicite:1]{index=1} */
 
-// Candidate field order (skills directly after past experience)
-const CAND_ORDER = [
-  "Name","Email","Phone Number","APPLICATION FOR EMPLOYMENT","Submitted On",
-  "Role(s) Desired","Past Experience","Skills/Certifications/Licenses",
-  "Criminal History","QuickHire\u2122 EEO Policy","QuickHire\u2122 Drug & Alcohol Policy",
-  "QuickHire\u2122 Workplace Safety (OSHA) Policy","Sex/Gender","Race/Ethnicity",
-  "Veteran Status","Disability Status","Signature","Date","Resume/CV Upload"
-];
+    /* Candidate order: Skills right after Past Experience */
+    const CAND_ORDER = [
+      "Name","Email","Phone Number","APPLICATION FOR EMPLOYMENT","Submitted On",
+      "Role(s) Desired","Past Experience","Skills/Certifications/Licenses",
+      "Criminal History","QuickHire\u2122 EEO Policy","QuickHire\u2122 Drug & Alcohol Policy",
+      "QuickHire\u2122 Workplace Safety (OSHA) Policy","Sex/Gender","Race/Ethnicity",
+      "Veteran Status","Disability Status","Signature","Date","Resume/CV Upload"
+    ];
 
-// Employer field order (exact sequence you requested)
-const EMP_ORDER = [
-  "Company Name","Contact Name","Email","Phone Number",
-  "Submitted On","QUICKHIRE EMPLOYER APPLICATION","Staffing Needs",
-  "Name","CompanyOrganization","Company/Organization","Date"
-];
-
-const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
-
+    /* Employers — exact sequence you requested (with synonyms fallback later) */
+    const EMP_ORDER = [
+      "Company Name","Contact Name","Email","Phone Number",
+      "Submitted On","QUICKHIRE EMPLOYER APPLICATION","Staffing Needs",
+      "Name","CompanyOrganization","Company/Organization","Date"
+    ];
+    const EMP_HEADERS = EMP_ORDER;
 
     let token=null, myEmail="", ACTIVE="candidates";
     const DS={
@@ -186,7 +182,30 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
     function pick(Hs, list){ for(const c of list){const i=Hs.findIndex(h=>h.trim().toLowerCase()===c.trim().toLowerCase()); if(i>=0) return Hs[i]; } return null; }
     function uniqKeep(a){ const seen=new Set(); return a.filter(x=>!seen.has(x)&&seen.add(x)); }
 
-    // ===== Auth
+    // Resolve resume: URL → open; Drive ID → download; filename → Drive search (across My/Shared drives)
+    async function getResumeLink(raw){
+      if(!raw) return null;
+      const val = String(raw).trim();
+      if (/^https?:\/\//i.test(val)) return val; // already a URL
+      if (/^[A-Za-z0-9_-]{20,}$/.test(val)) { // looks like Drive ID
+        return `https://drive.google.com/uc?id=${encodeURIComponent(val)}&export=download`;
+      }
+      const q = `name='${val.replace(/'/g, "\\'")}' and trashed=false`;
+      const url = `https://www.googleapis.com/drive/v3/files` +
+                  `?q=${encodeURIComponent(q)}` +
+                  `&fields=files(id,name,webViewLink,webContentLink)` +
+                  `&supportsAllDrives=true&includeItemsFromAllDrives=true` +
+                  `&pageSize=5&orderBy=recency`;
+      try{
+        const r = await fetch(url,{ headers:{ Authorization:`Bearer ${token}` }});
+        const j = await r.json();
+        const f = (j.files||[])[0];
+        if(!f) return null;
+        return f.webViewLink || f.webContentLink || `https://drive.google.com/uc?id=${encodeURIComponent(f.id)}&export=download`;
+      }catch{ return null; }
+    } /* Drive v3 files.list with q=name and link fields. :contentReference[oaicite:2]{index=2} */
+
+    // ===== Auth (popup fired inside click per GIS doc)
     $("#signin").onclick = function(){
       if(!window._gisReady){ setStatus("Loading Google… try again in a second"); return; }
       const cli = google.accounts.oauth2.initTokenClient({
@@ -201,7 +220,7 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
           await initSheet("candidates"); await initSheet("employers"); setActive(ACTIVE); setStatus("Loaded ✔");
         }
       });
-      cli.requestAccessToken({ prompt:"consent" });
+      cli.requestAccessToken({ prompt:"consent" }); /* GIS token model. :contentReference[oaicite:3]{index=3} */
       setTimeout(()=>{ if(!$("#who").textContent) setStatus(`If no Google window opened, allow pop-ups for ${location.origin}.`); }, 1200);
     };
     $("#signout").onclick = ()=>{ try{ if(token) google.accounts.oauth2.revoke(token);}catch{} location.reload(); };
@@ -236,28 +255,37 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
 
     async function loadActive(){
       const cur=DS[ACTIVE];
-      const range = encodeURIComponent(`${cur.tab}!A1:Z`);
+      const range = encodeURIComponent(`${cur.tab}!A1:ZZZ`);
       const data = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cur.sheetId}/values/${range}`,{headers:{Authorization:"Bearer "+token}}).then(r=>r.json());
       cur.rows=data.values||[];
       if(!cur.rows.length){ $("#thead").innerHTML=""; $("#tbody").innerHTML='<tr><td class="muted">No data yet.</td></tr>'; $("#count").textContent=""; syncScroll(); return; }
       cur.headers=cur.rows[0];
 
-      // Order columns: Name, Email, Phone, APPLICATION…, Submitted On, Roles, Past, Skills, then everything from Criminal onward
+      // ---- Column order
       let ordered;
-      if(ACTIVE==="candidates"){
-        const Hs=cur.headers;
-        const name=pick(Hs,["Name"]), email=pick(Hs,["Email"]), phone=pick(Hs,["Phone Number","Phone"]);
-        const app=pick(Hs,["APPLICATION FOR EMPLOYMENT","APPLICATION FOR EMPLOYMENT:"]);
-        const submitted=pick(Hs,["Submitted On","Date","SubmittedOn"]);
-        const roles=pick(Hs,["Roles Desired","Role(s) Desired"]);
-        const past=pick(Hs,["Past Experience","Experience","Work History"]);
-        const skills=pick(Hs,["Skills Certifications","Skills/Certifications/Licenses","Skills Certifications Licenses"]);
-        const crimHdr=pick(Hs,["Criminal History","Criminal"]); const crimIdx=crimHdr?Hs.indexOf(crimHdr):-1; const tail=crimIdx>=0?Hs.slice(crimIdx):[];
+      if (ACTIVE==="candidates") {
+        const Hs = cur.headers;
+        const name      = pick(Hs,["Name"]);
+        const email     = pick(Hs,["Email"]);
+        const phone     = pick(Hs,["Phone Number","Phone"]);
+        const app       = pick(Hs,["APPLICATION FOR EMPLOYMENT","APPLICATION FOR EMPLOYMENT:"]);
+        const submitted = pick(Hs,["Submitted On","Date","SubmittedOn"]);
+        const roles     = pick(Hs,["Roles Desired","Role(s) Desired"]);
+        const past      = pick(Hs,["Past Experience","Experience","Work History"]);
+        const skills    = pick(Hs,["Skills/Certifications/Licenses","Skills Certifications","Skills Certifications Licenses"]);
+        const crimHdr   = pick(Hs,["Criminal History","Criminal"]);
+        const crimIdx   = crimHdr ? Hs.indexOf(crimHdr) : -1;
+        const tail      = crimIdx >= 0 ? Hs.slice(crimIdx) : [];
         ordered = uniqKeep([name,email,phone,app,submitted,roles,past,skills].filter(Boolean).concat(tail));
-        const extras = Hs.filter(h=>!ordered.includes(h)); ordered = ordered.concat(extras);
+        const extras = Hs.filter(h=>!ordered.includes(h));
+        ordered = ordered.concat(extras);
       } else {
-        const prefer=["Company Name","Contact Name","Email","Phone Number","Date"];
-        ordered=[...new Set([...prefer, ...cur.headers])];
+        const prefer = [
+          "Company Name","Contact Name","Email","Phone Number",
+          "Submitted On","QUICKHIRE EMPLOYER APPLICATION","Staffing Needs",
+          "Name","CompanyOrganization","Company/Organization","Date"
+        ];
+        ordered = prefer.filter(h=>cur.headers.includes(h)).concat(cur.headers.filter(h=>!prefer.includes(h)));
       }
 
       $("#thead").innerHTML = ordered.map(h=>`<th>${esc(h)}</th>`).join("") + "<th></th>";
@@ -275,12 +303,33 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
       list.sort((a,b)=>{ const av=(a.data["Submitted On"]||a.data["Date"]||"")+"", bv=(b.data["Submitted On"]||b.data["Date"]||"")+""; return (Date.parse(bv)||0)-(Date.parse(av)||0); });
       if(q) list=list.filter(x=>Object.values(x.data).some(v=>(v||"").toString().toLowerCase().includes(q)));
       $("#count").textContent = list.length ? `${list.length} shown` : "";
-      $("#tbody").innerHTML = list.map(x=>{
-        const tds = headers.map(h=>`<td>${esc(x.data[h]||"")}</td>`).join("");
+
+      const rowsHtml = list.map(x=>{
+        const tds = headers.map(h=>{
+          const raw = x.data[h]||"";
+          if (ACTIVE==="candidates" && h==="Resume/CV Upload" && raw) {
+            if (/^https?:\/\//i.test(raw)) {
+              return `<td><a class="btn secondary" href="${esc(raw)}" target="_blank" rel="noopener">Open</a></td>`;
+            } else {
+              return `<td><button class="btn secondary" data-resume="${esc(raw)}">Open</button></td>`;
+            }
+          }
+          return `<td>${esc(raw)}</td>`;
+        }).join("");
         return `<tr data-row="${x.rowIndex}">${tds}<td class="row-actions"><button class="btn secondary" data-view="${x.rowIndex}">View</button><button class="btn ghost" data-edit="${x.rowIndex}">Edit</button></td></tr>`;
       }).join("");
-      $$('[data-view]').forEach(b=>b.onclick=()=>showDetails(parseInt(b.dataset.view,10)));
-      $$('[data-edit]').forEach(b=>b.onclick=()=>showForm(parseInt(b.dataset.edit,10)));
+
+      $("#tbody").innerHTML = rowsHtml;
+      $$('[data-view]').forEach(b=>b.onclick=()=>showDetails(parseInt(b.getAttribute('data-view'),10)));
+      $$('[data-edit]').forEach(b=>b.onclick=()=>showForm(parseInt(b.getAttribute('data-edit'),10)));
+      $$('[data-resume]').forEach(btn=>{
+        btn.onclick = async () => {
+          const name = btn.getAttribute('data-resume') || "";
+          const href = await getResumeLink(name);
+          if(href) window.open(href, "_blank", "noopener");
+          else alert("Resume link not found for: " + name);
+        };
+      });
     }
 
     function bindEditing(cur){
@@ -307,23 +356,30 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
       };
     }
 
-    function showDetails(rowIndex){
+    async function showDetails(rowIndex){
       const cur=DS[ACTIVE], rec=cur.model.find(m=>m.rowIndex===rowIndex); if(!rec) return;
       const d=rec.data; const fields=cur.fields.filter(h=>cur.headers.includes(h));
-      $("#detail-title").textContent = (ACTIVE==="candidates" ? (d["Name"]||`Row ${rowIndex}`) : (d["Company Name"]||`Row ${rowIndex}`));
-      $("#detail-body").innerHTML = fields.map(h=>`
-        <div style="margin-bottom:8px">
-          <div style="font-size:12px;color:#334155">${esc(h)}</div>
-          <div>${esc(d[h]||"—")}</div>
-        </div>`).join("")
-        + (ACTIVE==="candidates" && d["Resume/CV Upload"] ? ` <div class="row-actions" style="margin-top:12px"><a class="btn secondary" href="${esc(d["Resume/CV Upload"])}" target="_blank" rel="noopener">Open Resume</a></div>` : "");
+      document.getElementById("detail-title").textContent = (ACTIVE==="candidates" ? (d["Name"]||`Row ${rowIndex}`) : (d["Company Name"]||`Row ${rowIndex}`));
+
+      let extra = "";
+      if (ACTIVE==="candidates" && d["Resume/CV Upload"]) {
+        const href = await getResumeLink(d["Resume/CV Upload"]);
+        if (href) extra = `<div class="row-actions" style="margin-top:12px"><a class="btn secondary" href="${esc(href)}" target="_blank" rel="noopener">Open Resume</a></div>`;
+      }
+
+      document.getElementById("detail-body").innerHTML =
+        fields.map(h=>`
+          <div style="margin-bottom:8px">
+            <div style="font-size:12px;color:#334155">${esc(h)}</div>
+            <div>${esc(d[h]||"—")}</div>
+          </div>`).join("") + extra;
     }
 
     function showForm(rowIndex){
       const cur=DS[ACTIVE], isEdit=!!rowIndex, d=isEdit?(cur.model.find(m=>m.rowIndex===rowIndex)?.data||{}):{};
       const fields=cur.fields.filter(h=>cur.headers.includes(h));
-      $("#detail-title").textContent = isEdit ? `Edit — Row ${rowIndex}` : (ACTIVE==="candidates" ? "Add Candidate" : "Add Employer");
-      $("#detail-body").innerHTML = `<form id="f" onsubmit="return false"><input type="hidden" name="rowIndex" value="${isEdit?rowIndex:""}">
+      document.getElementById("detail-title").textContent = isEdit ? `Edit — Row ${rowIndex}` : (ACTIVE==="candidates" ? "Add Candidate" : "Add Employer");
+      document.getElementById("detail-body").innerHTML = `<form id="f" onsubmit="return false"><input type="hidden" name="rowIndex" value="${isEdit?rowIndex:""}">
         ${fields.map(h=>`<div style="margin-bottom:8px"><div style="font-size:12px;color:#334155">${esc(h)}</div><input class="cell-edit" name="${esc(h)}" value="${isEdit?esc(d[h]||""):""}"></div>`).join("")}
         <div class="row-actions" style="margin-top:10px">
           <button id="save" class="btn">${isEdit?"Save Changes":"Add"}</button>
@@ -336,6 +392,7 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
     function collectRow(cur){
       const f=$("#f"); const map={}; cur.headers.forEach(h=> map[h] = (f[h]?.value||"").trim() );
       if(cur.headers.includes("Date") && !map["Date"]) map["Date"]=new Date().toLocaleDateString();
+      if(cur.headers.includes("Submitted On") && !map["Submitted On"]) map["Submitted On"]=new Date().toLocaleDateString();
       return cur.headers.map(h=> map[h] || "" );
     }
 
@@ -345,16 +402,16 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
       const row = collectRow(cur);
       if(!rowIndex){
         await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cur.sheetId}/values/${encodeURIComponent(cur.tab||"Sheet1")}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
-          { method:"POST", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) });
+          { method:"POST", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) }); /* values.append USER_ENTERED. :contentReference[oaicite:4]{index=4} */
       } else {
         const lastCol=toCol(cur.headers.length); const a1=`${cur.tab||"Sheet1"}!A${rowIndex}:${lastCol}${rowIndex}`;
         await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cur.sheetId}/values/${encodeURIComponent(a1)}?valueInputOption=USER_ENTERED`,
-          { method:"PUT", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) });
+          { method:"PUT", headers:{ Authorization:"Bearer "+token, "Content-Type":"application/json" }, body: JSON.stringify({ values:[row], majorDimension:"ROWS" }) }); /* values.update. :contentReference[oaicite:5]{index=5} */
       }
       await loadActive();
     }
 
-    // ===== Horizontal scroll controls (native + buttons + float nudge)
+    // ===== Horizontal scroll (native + buttons + floating nudge)
     function initScrollControls(){
       const wrap=$("#wrap"), slider=$("#scrollX"), left=$("#left"), right=$("#right"), float=$("#scroll-float");
       if(!wrap) return;
@@ -365,9 +422,7 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
       };
       if(slider){ slider.oninput=()=>{ wrap.scrollLeft=Number(slider.value||0); }; }
       wrap.addEventListener('scroll', update);
-      // wheel => horizontal
       wrap.addEventListener('wheel', (e)=>{ if(Math.abs(e.deltaY)>Math.abs(e.deltaX)){ wrap.scrollLeft+=e.deltaY; e.preventDefault(); } }, {passive:false});
-      // buttons (press-and-hold)
       function hold(btn, dir){
         if(!btn) return; let t=null; const n=()=>{ wrap.scrollLeft += dir; };
         const start=()=>{ n(); t=setInterval(n,30); }; const stop=()=>{ clearInterval(t); t=null; };
@@ -378,7 +433,7 @@ const EMP_HEADERS = EMP_ORDER; // used for “Add Employer” form
       }
       hold(left,-120); hold(right,+120);
       if(float){
-        let t=null; const n=()=>wrap.scrollBy({left:Math.max(300, wrap.clientWidth*0.9), behavior:"smooth"}); /* MDN: Element.scrollBy */ 
+        let t=null; const n=()=>wrap.scrollBy({left:Math.max(300, wrap.clientWidth*0.9), behavior:"smooth"});
         const start=()=>{ n(); t=setInterval(n,350); }; const stop=()=>{ clearInterval(t); t=null; };
         float.addEventListener('mousedown', start); float.addEventListener('mouseup', stop); float.addEventListener('mouseleave', stop);
         float.addEventListener('click', ()=>n()); float.addEventListener('touchstart', e=>{ e.preventDefault(); start(); }, {passive:false}); float.addEventListener('touchend', stop);
